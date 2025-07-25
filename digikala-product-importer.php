@@ -225,22 +225,23 @@ class Digikala_Product_Importer {
     /**
      * استخراج شناسه محصول از URL
      */
-    private function extract_product_id($url) {
-        // الگوهای مختلف URL دیجی‌کالا
-        $patterns = array(
-            '/digikala\.com\/product\/dkp-(\d+)/',
-            '/digikala\.com\/product\/.*-dkp-(\d+)/',
-            '/dkp-(\d+)/'
-        );
-        
-        foreach ($patterns as $pattern) {
-            if (preg_match($pattern, $url, $matches)) {
-                return $matches[1];
-            }
+   private function extract_product_id($url) {
+    // الگوهای مختلف URL دیجی‌کالا
+    $patterns = [
+        '/digikala\.com\/product\/dkp-(\d+)/',
+        '/digikala\.com\/product\/.*-dkp-(\d+)/',
+        '/dkp-(\d+)/',
+        '/\/product\/(\d+)\//'
+    ];
+    
+    foreach ($patterns as $pattern) {
+        if (preg_match($pattern, $url, $matches)) {
+            return $matches[1];
         }
-        
-        return false;
     }
+    
+    return false;
+}
     
    /**
  * دریافت اطلاعات محصول از API دیجی‌کالا
@@ -293,49 +294,48 @@ private function prepare_preview_data($digikala_data) {
     
     $product = $digikala_data['data']['product'];
     
-    // استخراج تصاویر
-    $images = array(
-    'main' => $product['images']['main']['url'][0] ?? '',
-    'gallery' => array()
-);
-
-if (!empty($product['images']['list'])) {
-    foreach ($product['images']['list'] as $image) {
-        $img_url = $image['url'][0] ?? $image['url'] ?? '';
-        if ($img_url) {
-            $images['gallery'][] = $img_url;
+    // پردازش تصاویر
+    $images = [
+        'main' => $product['images']['main']['url'][0] ?? '',
+        'gallery' => []
+    ];
+    
+    if (!empty($product['images']['list'])) {
+        foreach ($product['images']['list'] as $image) {
+            if (!empty($image['url'][0])) {
+                $images['gallery'][] = $image['url'][0];
+            }
         }
     }
-}
     
-    // استخراج ویژگی‌ها
-    $specifications = array();
+    // پردازش ویژگی‌ها
+    $specs = [];
     if (!empty($product['review']['attributes'])) {
         foreach ($product['review']['attributes'] as $attr) {
-            $specifications[] = array(
+            $specs[] = [
                 'title' => $attr['title'] ?? '',
-                'value' => isset($attr['values'][0]) ? implode(', ', $attr['values']) : ''
-            );
+                'value' => isset($attr['values'][0]) ? $attr['values'][0] : ''
+            ];
         }
     }
     
-    return array(
+    return [
         'title' => $product['title_fa'] ?? '',
-        'price' => array(
+        'price' => [
             'regular' => $product['default_variant']['price']['rrp_price'] ?? 0,
             'sale' => $product['default_variant']['price']['selling_price'] ?? 0,
             'discount' => $product['default_variant']['price']['discount_percent'] ?? 0
-        ),
-        'description' => array(
+        ],
+        'description' => [
             'short' => $product['review']['description'] ?? '',
-            'full' => $product['review']['description'] ?? '' // در API جدید expert_reviews وجود ندارد
-        ),
+            'full' => $product['review']['description'] ?? ''
+        ],
         'images' => $images,
-        'category' => $product['category']['title_fa'] ?? $product['category'] ?? $product['data_layer']['category'] ?? '',
-        'brand' => $product['brand']['title_fa'] ?? $product['brand'] ?? $product['data_layer']['brand'] ?? '',
+        'category' => $product['category']['title_fa'] ?? '',
+        'brand' => $product['brand']['title_fa'] ?? '',
         'availability' => ($product['default_variant']['status'] ?? '') === 'marketable',
-        'specifications' => $specifications
-    );
+        'specifications' => $specs
+    ];
 }
 
     /**
@@ -358,7 +358,7 @@ if (!empty($product['images']['list'])) {
         
         // تنظیم توضیحات
         $product->set_short_description($product_data['review']['description'] ?? '');
-        $product->set_description($product_data['review']['description'] ?? '');
+        $product->set_description($product_data['expert_reviews'][0]['description'] ?? '');
         
         // تنظیم وضعیت موجودی
         $is_in_stock = ($product_data['default_variant']['status'] ?? '') === 'marketable';
@@ -377,16 +377,18 @@ if (!empty($product['images']['list'])) {
         $product_id = $product->save();
         
         if ($product_id) {
-        // تنظیم دسته‌بندی
-        $this->set_product_category($product_id, $product_data['category']['title_fa'] ?? $product_data['category'] ?? $product_data['data_layer']['category'] ?? '');
-
-        // تنظیم برند
-        $this->set_product_brand($product_id, $product_data['brand']['title_fa'] ?? $product_data['brand'] ?? $product_data['data_layer']['brand'] ?? '');
+            // تنظیم دسته‌بندی
+            $this->set_product_category($product_id, $product_data['category']['title_fa'] ?? '');
+            
+            // تنظیم برند
+            $this->set_product_brand($product_id, $product_data['brand']['title_fa'] ?? '');
+            
             // تنظیم تصاویر
             $this->set_product_images($product_id, $product_data['images'] ?? array());
             
             // تنظیم ویژگی‌ها
-            $this->set_product_attributes($product_id, $product_data['review']['attributes'] ?? array());        }
+            $this->set_product_attributes($product_id, $product_data['specifications'][0]['attributes'] ?? array());
+        }
         
         return $product_id;
     }
@@ -463,18 +465,20 @@ if (!empty($product['images']['list'])) {
             }
         }
         
-      // گالری تصاویر
-if (!empty($images_data['list'])) {
-    foreach (array_slice($images_data['list'], 1, 4) as $image_item) {
-        $img_url = $image_item['url'][0] ?? $image_item['url'] ?? '';
-        if ($img_url) {
-            $image_id = $this->upload_image_from_url($img_url, $product_id);
-            if ($image_id) {
-                $image_ids[] = $image_id;
+        // گالری تصاویر
+        if (!empty($images_data['list'])) {
+            foreach (array_slice($images_data['list'], 1, 4) as $image_url) {
+                $image_id = $this->upload_image_from_url($image_url, $product_id);
+                if ($image_id) {
+                    $image_ids[] = $image_id;
+                }
             }
         }
+        
+        if (!empty($image_ids)) {
+            update_post_meta($product_id, '_product_image_gallery', implode(',', array_slice($image_ids, 1)));
+        }
     }
-}
     
     /**
      * آپلود تصویر از URL
